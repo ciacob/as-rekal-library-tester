@@ -2,24 +2,219 @@
 <s:WindowedApplication xmlns:fx="http://ns.adobe.com/mxml/2009"
 	xmlns:s="library://ns.adobe.com/flex/spark"
 	xmlns:mx="library://ns.adobe.com/flex/mx"
-	creationComplete="_onCreate()">
+	creationComplete="_onCreationComplete()">
 
 	<fx:Script>
 		<![CDATA[
-			[Bindable]
-			private var _results:Object;
+			import com.github.ciacob.asrekallibrary.Preset;
+			import flash.utils.setTimeout;
 			
-			private var _tester:RekalTest;
+			private var _rig:TestRig;
 			
-			private function _onCreate():void {
-				_tester = new RekalTest();
-				_results = _tester.run();
+			private function _onTestingDone(summary:String, results:Object):void {
+				statusLabel.text = summary + "\nSee console for complete test results.";
+			}
+			
+			private function _onCreationComplete():void {
+				_rig = new TestRig;
+			
+				// Enlist test suites here
+				testSuite_PresetBasic();
+				testSuite_PresetPersistence();
+				testSuite_PresetCloning();
+			
+				// Execute tests
+				_rig.execute(_onTestingDone);
+			}
+			
+			
+			/**
+			 * Tests basic functionality.
+			 */
+			private function testSuite_PresetBasic():void {
+			
+				trace("Running Preset Basic Tests...");
+			
+				_rig.addTest("Constructor accepts name and shallow settings", function():* {
+						const p:Preset = new Preset("Test1", {brightness: 90});
+						return p.name == "Test1" && p.settings.$get("brightness") == 90;
+					}, true);
+			
+				_rig.addTest("Constructor defaults to mutable", function():* {
+						const p:Preset = new Preset("Test2", {volume: 50});
+						p.name = "NewName";
+						p.settings.$set("volume", 75);
+						return p.name == "NewName" && p.settings.$get("volume") == 75;
+					}, true);
+			
+				_rig.addTest("Constructor applies readonly if conditions met", function():* {
+						const p:Preset = new Preset("Locked", {contrast: 100}, true);
+						p.name = "Changed";
+						p.settings.$set("contrast", 0);
+						return p.name == "Locked" && p.settings.$get("contrast") == 100;
+					}, true);
+			
+				const initialSettings:Object = {volume: 75,
+						theme: "dark"};
+				const preset:Preset = new Preset("UserPreset1", initialSettings);
+				_rig.addTest("Name is assigned correctly", function():* {
+						return preset.name;
+					}, "UserPreset1");
+			
+				_rig.addTest("Settings object exposes correct volume", function():* {
+						return preset.settings.$get("volume");
+					}, 75);
+			
+				_rig.addTest("Settings object exposes correct theme", function():* {
+						return preset.settings.$get("theme");
+					}, "dark");
+			
+				_rig.addTest("Hash reflects settings only, not name", function():* {
+						const p1:Preset = new Preset("A", {x: 1});
+						const p2:Preset = new Preset("B", {x: 1});
+						return p1.hash == p2.hash;
+					}, true);
+			
+				_rig.addTest("Hash differs on settings change", function():* {
+						const p1:Preset = new Preset("P1", {a: 1});
+						const p2:Preset = new Preset("P2", {a: 2});
+						return p1.hash != p2.hash;
+					}, true);
+			
+				_rig.addTest("Hash changes after mutation", function():* {
+						const originalHash:String = preset.hash;
+						preset.settings.$set("volume", 20);
+						return (preset.hash != originalHash);
+					}, true);
+			
+				_rig.addTest("Readonly prevents name change", function():* {
+						const locked:Preset = new Preset("SystemPreset", initialSettings, true);
+						const originalName:String = locked.name;
+						locked.name = "Tampered";
+						return (locked.name == originalName);
+					}, true);
+			
+				_rig.addTest("Readonly prevents settings change", function():* {
+						const locked:Preset = new Preset("Locked", initialSettings, true);
+						locked.settings.$set("volume", 100);
+						return (locked.settings.$get("volume") == 75);
+					}, true);
+			
+				_rig.addTest("Readonly returns false when conditions not met", function():* {
+						const p:Preset = new Preset(null, null, true);
+						return p.readonly;
+					}, false);
+			
+				_rig.addTest("Readonly returns true when all conditions met", function():* {
+						const p:Preset = new Preset("System", {lang: "EN"}, true);
+						return p.readonly;
+					}, true);
+			}
+			
+			/**
+			 * Test persistence-related functionality.
+			 */
+			private function testSuite_PresetPersistence():void {
+				trace("Running Preset Persistence Tests...");
+			
+				const initialSettings:Object = {brightness: 50,
+						resolution: "1080p"};
+			
+				const file:File = File.applicationStorageDirectory.resolvePath("temp_preset_test.rekal");
+				if (file.exists) {
+					file.deleteFile();
+				}
+			
+				const original:Preset = new Preset("PersistMe", initialSettings, true);
+			
+				_rig.addTest("Preset can be written to disk", function():* {
+						return original.toDisk(file);
+					}, true);
+			
+				_rig.addTest("File exists after toDisk()", function():* {
+						return file.exists;
+					}, true);
+			
+				const restored:Preset = Preset.fromDisk(file);
+			
+				_rig.addTest("Restored Preset is not null", function():* {
+						return restored != null;
+					}, true);
+			
+				_rig.addTest("Restored Preset has same name", function():* {
+						if (!restored) {
+							return null;
+						}
+						return restored.name;
+					}, "PersistMe");
+			
+				_rig.addTest("Restored Preset preserves readonly flag", function():* {
+						if (!restored) {
+							return null;
+						}
+						return restored.readonly;
+					}, true);
+			
+				_rig.addTest("Restored Preset has same hash as original", function():* {
+						if (!restored) {
+							return null;
+						}
+						return restored.hash == original.hash;
+					}, true);
+			
+				_rig.addTest("Restored Preset preserves setting (resolution)", function():* {
+						if (!restored) {
+							return null;
+						}
+						return restored.settings.$get("resolution");
+					}, "1080p");
+			
+				_rig.addTest("Overriding file works", function():* {
+						if (!restored) {
+							return null;
+						}
+						return original.toDisk(file, true);
+					}, true);
+			
+				_rig.addTest("Preset.fromDisk returns null on missing file", function():* {
+						const missingFile:File = File.applicationStorageDirectory.resolvePath("doesNotExist.preset");
+						return Preset.fromDisk(missingFile) == null;
+					}, true);
+			
+				// Clean up
+				if (file.exists) {
+					try {
+						file.deleteFile();
+					}
+					catch (e:Error) {
+						trace("Cleanup failed for test file.");
+					}
+				}
+			}
+			
+			/**
+			 * Test clone-related functionality.
+			 */
+			private function testSuite_PresetCloning():void {
+				_rig.addTest("Clone preserves structure", function():* {
+						const p1:Preset = new Preset("Original", {z: 99});
+						const p2:Preset = p1.clone();
+						return p2.name == "Original" && p2.settings.$get("z") == 99;
+					}, true);
+			
+				_rig.addTest("Clone allows readonly override", function():* {
+						const p1:Preset = new Preset("System", {x: 10}, true);
+						const p2:Preset = p1.clone(false);
+						p2.name = "Editable";
+						p2.settings.$set("x", 20);
+						return p2.name == "Editable" && p2.settings.$get("x") == 20;
+					}, true);
 			}
 		]]>
 	</fx:Script>
 
-	<s:Label id="statusLabel" textAlign="center"
-		text="{((_results.fail.length === 0)? 'ALL PASSED.\n' : '[!!] ' + _results.fail.length + ' failures.\n')}&#10;See console for complete test results."
+	<s:Label id="statusLabel"
+		text="Processing"
 		fontSize="14"
 		verticalCenter="0" horizontalCenter="0"
 		top="10" left="10"/>

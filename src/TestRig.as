@@ -258,13 +258,7 @@ package {
             }
             if (_results.fail.length > 0) {
                 lines.push('Failures:');
-
-                trace('---> before sort', JSON.stringify(_results.fail));
-
                 _results.fail.sort(_byOrder);
-
-                trace('---> after sort', JSON.stringify(_results.fail));
-
                 for each (var fail:Object in _results.fail) {
                     lines.push('- ' + _doFailInfo(fail.info, fail.result, fail.expectedResult, false));
                 }

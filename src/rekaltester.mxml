@@ -2,38 +2,121 @@
 <s:WindowedApplication xmlns:fx="http://ns.adobe.com/mxml/2009"
 	xmlns:s="library://ns.adobe.com/flex/spark"
 	xmlns:mx="library://ns.adobe.com/flex/mx"
-	creationComplete="_onCreationComplete()">
+	xmlns:rekalui="com.github.ciacob.asrekallibrary.ui.*"
+	width="800"
+	height="600"
+	creationComplete="_onCreationComplete()"
+	backgroundColor="#404040"
+	chromeColor="#404040"
+	color="#ffffff">
+
+	<fx:Style>
+		@namespace s "library://ns.adobe.com/flex/spark";
+		@namespace mx "library://ns.adobe.com/flex/mx";
+
+		s|ComboBox, s|TextInput {
+			color: #000000;
+		}
+	</fx:Style>
 
 	<fx:Script>
 		<![CDATA[
 			import com.github.ciacob.asrekallibrary.Preset;
 			import flash.utils.setTimeout;
+			import com.github.ciacob.asrekallibrary.events.PresetEvent;
+			import com.github.ciacob.asrekallibrary.Manager;
+			import com.github.ciacob.asshardlibrary.IShard;
+			import com.github.ciacob.asshardlibrary.Shard;
 			
 			private var _rig:TestRig;
+			
+			/**
+			 * Test helper: makes random ASCII printable characters from 33 (!) to 126 (~)
+			 */
+			private function junkStr(length:int):String {
+				var result:String = "";
+				for (var i:int = 0; i < length; i++) {
+					var charCode:int = 33 + Math.floor(Math.random() * (126 - 33 + 1));
+					result += String.fromCharCode(charCode);
+				}
+				return result;
+			};
+			
+			/**
+			 * Helper, trims a string. Returns an empty string for `null`.
+			 */
+			private function _trim(str:String):String {
+				if (!str) {
+					return '';
+				}
+				return str.replace(/^\s+|\s+$/g, '');
+			}
 			
 			private function _onTestingDone(summary:String, results:Object):void {
 				statusLabel.text = summary + "\nSee console for complete test results.";
 			}
 			
 			private function _onCreationComplete():void {
+
+				// --------
+				// UI TESTS
+				// --------
+				const mgr:Manager = new Manager(File.desktopDirectory);
+				testUi.initializeWith(mgr);
+				const providePresetData:Function = function(event:PresetEvent):void {
+					const rawData:String = _trim(dummyPresetPayload.text);
+					if (rawData) {
+						try {
+							const data:Object = JSON.parse(rawData);
+							event.data.commit(data);
+						}
+						catch (ex:Error) {
+							trace('Could not send data to preset manager. Details:',
+									[ex.message, ex.getStackTrace()].join('\n\n'));
+						}
+					}
+				};
+
+				const updatePresetData: Function = function (event : PresetEvent) : void {
+					const preset : Preset = (event.data as Preset);
+					if (preset) {
+						const settings : Shard = preset.settings as Shard;
+						const json : String = settings.exportTo(Shard.JSON_FORMAT);
+						const obj : Object = JSON.parse (json);
+						dummyPresetPayload.text = JSON.stringify(obj.content, null, 2);
+					}
+				}
+
+				testUi.addEventListener(PresetEvent.SAVING, providePresetData);
+				testUi.addEventListener(PresetEvent.CHANGE, updatePresetData);
+			
+				// ----------
+				// UNIT TESTS
+				// ----------
 				_rig = new TestRig;
 			
 				// Enlist test suites here
 				testSuite_PresetBasic();
 				testSuite_PresetPersistence();
 				testSuite_PresetCloning();
+				testSuite_PresetAsync();
+			
+				testsuite_Manager_$set();
+				testsuite_Manager_lookup_and_find();
+				testsuite_Manager_delete();
+				testsuite_Manager_async_set();
+				testsuite_Manager_async_list();
+				testsuite_Manager_async_lookup();
+				testsuite_Manager_async_delete();
 			
 				// Execute tests
 				_rig.execute(_onTestingDone);
 			}
 			
-			
 			/**
-			 * Tests basic functionality.
+			 * Tests basic Preset functionality.
 			 */
 			private function testSuite_PresetBasic():void {
-			
-				trace("Running Preset Basic Tests...");
 			
 				_rig.addTest("Constructor accepts name and shallow settings", function():* {
 						const p:Preset = new Preset("Test1", {brightness: 90});
@@ -112,10 +195,9 @@
 			}
 			
 			/**
-			 * Test persistence-related functionality.
+			 * Test persistence-related Preset functionality.
 			 */
 			private function testSuite_PresetPersistence():void {
-				trace("Running Preset Persistence Tests...");
 			
 				const initialSettings:Object = {brightness: 50,
 						resolution: "1080p"};
@@ -193,7 +275,7 @@
 			}
 			
 			/**
-			 * Test clone-related functionality.
+			 * Test clone-related PReset functionality.
 			 */
 			private function testSuite_PresetCloning():void {
 				_rig.addTest("Clone preserves structure", function():* {
@@ -210,12 +292,640 @@
 						return p2.name == "Editable" && p2.settings.$get("x") == 20;
 					}, true);
 			}
+			
+			/**
+			 * Tests async-related Preset functionality.
+			 */
+			private function testSuite_PresetAsync():void {
+				const file:File = File.createTempFile();
+			
+				_rig.addTest("Preset.toDiskAsync() saves to disk and dispatches SAVED",
+						function():* {
+							const preset:Preset = new Preset("test1", {x: 1});
+							preset.toDiskAsync(file, true);
+							return preset;
+						},
+						function(preset:Preset, commit:Function):void {
+							preset.addEventListener(PresetEvent.SAVED, function(e:PresetEvent):void {
+			
+									// Also cleanup the test file
+									file.deleteFile();
+									commit(true);
+								});
+							preset.addEventListener(PresetEvent.ERROR, function(e:PresetEvent):void {
+									commit(false);
+								});
+						});
+			
+				_rig.addTest("Preset.fromDiskAsync() reads valid preset and dispatches LOADED",
+						function():* {
+							const preset:Preset = new Preset("test2", {x: 1, y: 2});
+							const file:File = File.createTempFile();
+							preset.toDisk(file, true); // sync write
+							return file;
+						},
+						function(file:File, commit:Function):void {
+							file.addEventListener(PresetEvent.LOADED, function(e:PresetEvent):void {
+									const loaded:Preset = e.data as Preset;
+									commit(loaded && loaded.name === "test2" && loaded.settings.$get("x") === 1);
+									file.deleteFile(); // cleanup
+								});
+							file.addEventListener(PresetEvent.ERROR, function():void {
+									commit(false);
+								});
+							Preset.fromDiskAsync(file);
+						});
+			
+				_rig.addTest("Preset.fromDiskAsync() fails with ERROR on non-existent file",
+						function():* {
+							const file:File = File.createTempFile();
+							file.deleteFile(); // ensure it's gone
+							return file;
+						},
+						function(file:File, commit:Function):void {
+							file.addEventListener(PresetEvent.ERROR, function(e:PresetEvent):void {
+									const reason:String = e.data ? e.data.reason : null;
+									commit(reason && reason.indexOf("exist") !== -1);
+								});
+							Preset.fromDiskAsync(file);
+						});
+			
+				_rig.addTest("fromDiskAsync(null) throws ArgumentError",
+						function():* {
+							return function():void {
+								Preset.fromDiskAsync(null);
+							};
+						},
+						function(fn:Function, commit:Function):void {
+							try {
+								fn();
+								commit(false);
+							}
+							catch (e:ArgumentError) {
+								commit(true);
+							}
+							catch (e:Error) {
+								commit(false); // wrong error type
+							}
+						});
+			
+				_rig.addTest("toDiskAsync(null) emits ERROR",
+						function():* {
+							const preset:Preset = new Preset("badWrite", {x: 1});
+							var result:* = null;
+			
+							const handler:Function = function(e:PresetEvent):void {
+								preset.removeEventListener(PresetEvent.ERROR, handler);
+								const reason:String = e.data ? e.data.reason : null;
+								result = (e.type === PresetEvent.ERROR &&
+										reason === 'Given file is invalid.');
+							};
+			
+							preset.addEventListener(PresetEvent.ERROR, handler);
+							preset.toDiskAsync(null);
+							return function(commit:Function):void {
+								setTimeout(function():void {
+										commit(result === true);
+									}, 100);
+							};
+						},
+						function(testFn:Function, commit:Function):void {
+							testFn(commit);
+						});
+			
+				_rig.addTest("toDiskAsync() emits ERROR on file exists and no overwrite",
+						function():* {
+							const preset:Preset = new Preset("denyOverwrite", {x: 2});
+							const file:File = File.createTempFile();
+							preset.toDisk(file); // create file synchronously
+			
+							var result:* = null;
+							const handler:Function = function(e:PresetEvent):void {
+								preset.removeEventListener(PresetEvent.ERROR, handler);
+								const reason:String = e.data ? e.data.reason : null;
+								result = (e.type === PresetEvent.ERROR &&
+										reason === 'File exists and not overwriting.');
+								file.deleteFile(); // cleanup
+							};
+			
+							preset.addEventListener(PresetEvent.ERROR, handler);
+							preset.toDiskAsync(file); // no overwrite flag
+							return function(commit:Function):void {
+								setTimeout(function():void {
+										commit(result === true);
+									}, 100);
+							};
+						},
+						function(testFn:Function, commit:Function):void {
+							testFn(commit);
+						});
+			
+			}
+			
+			/**
+			 * Tests basic Manager functionality - $set.
+			 */
+			private function testsuite_Manager_$set():void {
+				_rig.addTest("[$set] returns 1 for new preset", function():* {
+						const mgr:Manager = new Manager(File.createTempDirectory());
+						return mgr.$set({a: 1, b: 2}, "newOne");
+					}, 1);
+			
+				_rig.addTest("[$set] returns 0 if preset already exists unchanged", function():* {
+						const dir:File = File.createTempDirectory();
+						const mgr:Manager = new Manager(dir);
+						mgr.$set({foo: "bar"}, "same");
+						return mgr.$set({foo: "bar"}, "same");
+					}, 0);
+			
+				_rig.addTest("[$set] returns -1 for existing preset with different hash and no overwrite", function():* {
+						const dir:File = File.createTempDirectory();
+						const mgr:Manager = new Manager(dir);
+						mgr.$set({x: 1}, "conflict");
+						return mgr.$set({x: 999}, "conflict");
+					}, -1);
+			
+				_rig.addTest("[$set] returns 2 when overwriting preset", function():* {
+						const dir:File = File.createTempDirectory();
+						const mgr:Manager = new Manager(dir);
+						mgr.$set({x: "old"}, "toOverwrite");
+						return mgr.$set({x: "new"}, "toOverwrite", true);
+					}, 2);
+			
+				_rig.addTest("[$set] returns -3 if data is invalid", function():* {
+						const mgr:Manager = new Manager(File.createTempDirectory());
+						return mgr.$set(null, "bad");
+					}, -3);
+			
+				_rig.addTest("[$set] returns -4 if name is empty", function():* {
+						const mgr:Manager = new Manager(File.createTempDirectory(), 5);
+						return mgr.$set({foo: "bar"}, "   ");
+					}, -4);
+			
+				_rig.addTest("[$set] returns -4 if name is too long", function():* {
+						const mgr:Manager = new Manager(File.createTempDirectory(), 5);
+						return mgr.$set({foo: "bar"}, junkStr(mgr.labelMaxLength + 1));
+					}, -4);
+			
+			}
+			
+			/**
+			 * Tests basic Manager functionality - lookup & find.
+			 */
+			private function testsuite_Manager_lookup_and_find():void {
+				_rig.addTest("[lookup] can retrieve preset by name", function():* {
+						const dir:File = File.createTempDirectory();
+						const mgr:Manager = new Manager(dir);
+						const name:String = "lookupName";
+						mgr.$set({x: 1}, name);
+						const found:Preset = mgr.lookup(name);
+						return found && found.name === name;
+					}, true);
+			
+				_rig.addTest("[lookup] matches by other Preset", function():* {
+						const dir:File = File.createTempDirectory();
+						const mgr:Manager = new Manager(dir);
+						const name:String = "matchByOtherPreset";
+						const preset:Preset = new Preset(name, {r: 42});
+						mgr.$set(preset, preset.name);
+						const clone:Preset = preset.clone();
+						const found:Preset = mgr.lookup(clone);
+						return found && found.name === name;
+					}, true);
+			
+				_rig.addTest("[lookup] matches by other Preset's settings", function():* {
+						const dir:File = File.createTempDirectory();
+						const mgr:Manager = new Manager(dir);
+						const name:String = "matchByOtherPresetSettings";
+						const preset:Preset = new Preset(name, {w: 152});
+						mgr.$set(preset, name);
+						const found:Preset = mgr.lookup(preset.settings);
+						return found && found.name === name;
+					}, true);
+			
+				_rig.addTest("[lookup] matches by Object content", function():* {
+						const dir:File = File.createTempDirectory();
+						const mgr:Manager = new Manager(dir);
+						const name:String = "matchByObject";
+						mgr.$set({a: 9}, name);
+						const found:Preset = mgr.lookup({a: 9});
+						return found && found.name === name;
+					}, true);
+			
+				_rig.addTest("[list] returns correct number of presets", function():* {
+						const dir:File = File.createTempDirectory();
+						const mgr:Manager = new Manager(dir);
+						mgr.$set({a: 1}, "one");
+						mgr.$set({b: 2}, "two");
+						const listed:Vector.<Preset> = mgr.list();
+						return listed.length;
+					}, 2);
+			
+			}
+			
+			/**
+			 * Tests basic Manager functionality - delete.
+			 */
+			private function testsuite_Manager_delete():void {
+				_rig.addTest("[$delete] returns 1 on success", function():* {
+						const dir:File = File.createTempDirectory();
+						const mgr:Manager = new Manager(dir);
+						mgr.$set({kill: true}, "delTest");
+						return mgr.$delete("delTest");
+					}, 1);
+			
+				_rig.addTest("[$delete] returns 0 if preset not found", function():* {
+						const mgr:Manager = new Manager(File.createTempDirectory());
+						return mgr.$delete("nothing");
+					}, 0);
+			
+				_rig.addTest("[$delete] returns -1 if preset is read-only", function():* {
+						const dir:File = File.createTempDirectory();
+						const mgr:Manager = new Manager(dir);
+						mgr.$set(new Preset("locked", {a: 1}, true), "locked");
+						return mgr.$delete("locked");
+					}, -1);
+			
+			}
+			
+			/**
+			 * Test async-related Manager functionality - set.
+			 */
+			private function testsuite_Manager_async_set():void {
+			
+				_rig.addTest("[$setAsync] dispatches SET_COMPLETE with code 1 for new Preset",
+						function():* {
+							const mgr:Manager = new Manager(File.createTempDirectory());
+							return mgr;
+						},
+						function(mgr:Manager, commit:Function):void {
+							const handler:Function = function(e:PresetEvent):void {
+								mgr.removeEventListener(PresetEvent.SET_COMPLETE, handler);
+								commit(e.type === PresetEvent.SET_COMPLETE && e.data.code === 1);
+							};
+							mgr.addEventListener(PresetEvent.SET_COMPLETE, handler);
+							mgr.$setAsync({async1: true}, "asyncTest1");
+						});
+			
+				_rig.addTest("[$setAsync] dispatches SET_COMPLETE with code 0 for identical Preset",
+						function():* {
+							const mgr:Manager = new Manager(File.createTempDirectory());
+							mgr.$set({dup: 123}, "dup"); // Sync setup for simplicity
+							return mgr;
+						},
+						function(mgr:Manager, commit:Function):void {
+							const handler:Function = function(e:PresetEvent):void {
+								mgr.removeEventListener(PresetEvent.SET_COMPLETE, handler);
+								commit(e.type === PresetEvent.SET_COMPLETE && e.data.code === 0);
+							};
+							mgr.addEventListener(PresetEvent.SET_COMPLETE, handler);
+							mgr.$setAsync({dup: 123}, "dup");
+						});
+			
+				_rig.addTest("[$setAsync] dispatches ERROR with code -2 for read-only Preset overwrite",
+						function():* {
+							const mgr:Manager = new Manager(File.createTempDirectory());
+							const preset:Preset = new Preset("ro", {r: 1}, true);
+							mgr.$set(preset, "ro");
+							return mgr;
+						},
+						function(mgr:Manager, commit:Function):void {
+							const handler:Function = function(e:PresetEvent):void {
+								mgr.removeEventListener(PresetEvent.ERROR, handler);
+								commit(e.type === PresetEvent.ERROR && e.data.code === -2);
+							};
+							mgr.addEventListener(PresetEvent.ERROR, handler);
+							mgr.$setAsync({r: 2}, "ro", true);
+						});
+			
+				_rig.addTest("[$setAsync] dispatches ERROR with code -4 for invalid name (empty)",
+						function():* {
+							return new Manager(File.createTempDirectory());
+						},
+						function(mgr:Manager, commit:Function):void {
+							const handler:Function = function(e:PresetEvent):void {
+								mgr.removeEventListener(PresetEvent.ERROR, handler);
+								commit(e.type === PresetEvent.ERROR && e.data.code === -4);
+							};
+							mgr.addEventListener(PresetEvent.ERROR, handler);
+							mgr.$setAsync({ok: 1}, "   "); // invalid name
+						});
+			
+				_rig.addTest("[$setAsync] dispatches ERROR with code -4 for invalid name (too long)",
+						function():* {
+							return new Manager(File.createTempDirectory());
+						},
+						function(mgr:Manager, commit:Function):void {
+							const handler:Function = function(e:PresetEvent):void {
+								mgr.removeEventListener(PresetEvent.ERROR, handler);
+								commit(e.type === PresetEvent.ERROR && e.data.code === -4);
+							};
+							mgr.addEventListener(PresetEvent.ERROR, handler);
+							mgr.$setAsync({ok: 1}, junkStr(mgr.labelMaxLength + 1)); // name too long
+						});
+			
+				_rig.addTest("[$setAsync] dispatches ERROR with code -3 for invalid data",
+						function():* {
+							return new Manager(File.createTempDirectory());
+						},
+						function(mgr:Manager, commit:Function):void {
+							const handler:Function = function(e:PresetEvent):void {
+								mgr.removeEventListener(PresetEvent.ERROR, handler);
+								commit(e.type === PresetEvent.ERROR && e.data.code === -3);
+							};
+							mgr.addEventListener(PresetEvent.ERROR, handler);
+							mgr.$setAsync(null, "bad");
+						});
+			
+			}
+			
+			/**
+			 * Test async-related Manager functionality - list.
+			 */
+			private function testsuite_Manager_async_list():void {
+			
+				_rig.addTest("[listAsync] lists all valid Presets",
+						function():* {
+							const mgr:Manager = new Manager(File.createTempDirectory());
+							mgr.$set({v: 1}, "a");
+							mgr.$set({v: 2}, "b");
+							mgr.$set({v: 3}, "c");
+							return mgr;
+						},
+						function(mgr:Manager, commit:Function):void {
+							const handler:Function = function(e:PresetEvent):void {
+								mgr.removeEventListener(PresetEvent.LIST_COMPLETE, handler);
+								const list:Vector.<Preset> = e.data as Vector.<Preset>;
+								const expectedNames:Array = ["a", "b", "c"];
+								commit(list.length === 3 && list.every(function(p:Preset, ...ignore):Boolean {
+											const i:int = expectedNames.indexOf(p.name);
+											return (i != -1 && expectedNames.splice(i, 1));
+										}));
+							};
+							mgr.addEventListener(PresetEvent.LIST_COMPLETE, handler);
+							mgr.listAsync();
+						});
+			
+				_rig.addTest("[listAsync] filters Presets with predicate",
+						function():* {
+							const mgr:Manager = new Manager(File.createTempDirectory());
+							mgr.$set({v: 1}, "a");
+							mgr.$set({v: 2}, "b");
+							mgr.$set({v: 3}, "c");
+							return mgr;
+						},
+						function(mgr:Manager, commit:Function):void {
+							const handler:Function = function(e:PresetEvent):void {
+								mgr.removeEventListener(PresetEvent.LIST_COMPLETE, handler);
+								const list:Vector.<Preset> = e.data as Vector.<Preset>;
+								commit(list.length === 1 && list[0].name === "b");
+							};
+							mgr.addEventListener(PresetEvent.LIST_COMPLETE, handler);
+							mgr.listAsync(function(p:Preset):Boolean {
+									return p.settings.$get("v") === 2;
+								});
+						});
+			
+				_rig.addTest("[listAsync] sorts Presets alphabetically descending",
+						function():* {
+							const mgr:Manager = new Manager(File.createTempDirectory());
+							mgr.$set({v: 1}, "a");
+							mgr.$set({v: 2}, "b");
+							mgr.$set({v: 3}, "c");
+							return mgr;
+						},
+						function(mgr:Manager, commit:Function):void {
+							const handler:Function = function(e:PresetEvent):void {
+								mgr.removeEventListener(PresetEvent.LIST_COMPLETE, handler);
+								const list:Vector.<Preset> = e.data as Vector.<Preset>;
+								const names:Array = [];
+								list.forEach(function(p:Preset, ...ignore):void {
+										names.push(p.name);
+									});
+								commit(JSON.stringify(names) === JSON.stringify(["c", "b", "a"]));
+							};
+							mgr.addEventListener(PresetEvent.LIST_COMPLETE, handler);
+							mgr.listAsync(null, function(a:Preset, b:Preset):int {
+									return b.name.localeCompare(a.name);
+								});
+						});
+			
+				_rig.addTest("[listAsync] returns empty list from empty directory",
+						function():* {
+							return new Manager(File.createTempDirectory());
+						},
+						function(mgr:Manager, commit:Function):void {
+							const handler:Function = function(e:PresetEvent):void {
+								mgr.removeEventListener(PresetEvent.LIST_COMPLETE, handler);
+								commit((e.data as Vector.<Preset>).length === 0);
+							};
+							mgr.addEventListener(PresetEvent.LIST_COMPLETE, handler);
+							mgr.listAsync();
+						});
+			
+				_rig.addTest("[listAsync] ignores invalid preset files",
+						function():* {
+							const dir:File = File.createTempDirectory();
+							const mgr:Manager = new Manager(dir);
+			
+							// Valid Preset
+							mgr.$set({ok: 1}, "good");
+			
+							// Invalid file
+							const invalid:File = dir.resolvePath("junk.invalid");
+							const stream:FileStream = new FileStream();
+							stream.open(invalid, FileMode.WRITE);
+							stream.writeUTFBytes("nonsense");
+							stream.close();
+			
+							return mgr;
+						},
+						function(mgr:Manager, commit:Function):void {
+							const handler:Function = function(e:PresetEvent):void {
+								mgr.removeEventListener(PresetEvent.LIST_COMPLETE, handler);
+								const list:Vector.<Preset> = e.data as Vector.<Preset>;
+								commit(list.length === 1 && list[0].name === "good");
+							};
+							mgr.addEventListener(PresetEvent.LIST_COMPLETE, handler);
+							mgr.listAsync();
+						});
+			
+			}
+			
+			/**
+			 * Test async-related Manager functionality - lookup.
+			 */
+			private function testsuite_Manager_async_lookup():void {
+				_rig.addTest("[lookupAsync] finds preset by name",
+						function():* {
+							const mgr:Manager = new Manager(File.createTempDirectory());
+							mgr.$set({x: 1}, "alpha");
+							return mgr;
+						},
+						function(mgr:Manager, commit:Function):void {
+							const handler:Function = function(e:PresetEvent):void {
+								mgr.removeEventListener(PresetEvent.LOOKUP_COMPLETE, handler);
+								const preset:Preset = e.data as Preset;
+								commit(preset && preset.name === "alpha" && preset.settings.$get("x") === 1);
+							};
+							mgr.addEventListener(PresetEvent.LOOKUP_COMPLETE, handler);
+							mgr.lookupAsync("alpha");
+						});
+			
+				_rig.addTest("[lookupAsync] finds preset by settings Object",
+						function():* {
+							const mgr:Manager = new Manager(File.createTempDirectory());
+							mgr.$set({foo: "bar"}, "omega");
+							return mgr;
+						},
+						function(mgr:Manager, commit:Function):void {
+							const handler:Function = function(e:PresetEvent):void {
+								mgr.removeEventListener(PresetEvent.LOOKUP_COMPLETE, handler);
+								const preset:Preset = e.data as Preset;
+								commit(preset && preset.name === "omega");
+							};
+							mgr.addEventListener(PresetEvent.LOOKUP_COMPLETE, handler);
+							mgr.lookupAsync({foo: "bar"});
+						});
+			
+				_rig.addTest("[lookupAsync] finds preset by IShard",
+						function():* {
+							const mgr:Manager = new Manager(File.createTempDirectory());
+							const preset:Preset = new Preset("shardMatch", {a: 123});
+							mgr.$set(preset, "shardMatch");
+							return {mgr: mgr, shard: preset.settings};
+						},
+						function(context:Object, commit:Function):void {
+							const mgr:Manager = context.mgr;
+							const shard:IShard = context.shard;
+			
+							const handler:Function = function(e:PresetEvent):void {
+								mgr.removeEventListener(PresetEvent.LOOKUP_COMPLETE, handler);
+								const preset:Preset = e.data as Preset;
+								commit(preset && preset.name === "shardMatch");
+							};
+							mgr.addEventListener(PresetEvent.LOOKUP_COMPLETE, handler);
+							mgr.lookupAsync(shard);
+						});
+			
+				_rig.addTest("[lookupAsync] returns null for unmatched",
+						function():* {
+							const mgr:Manager = new Manager(File.createTempDirectory());
+							mgr.$set({x: 1}, "named");
+							return mgr;
+						},
+						function(mgr:Manager, commit:Function):void {
+							const handler:Function = function(e:PresetEvent):void {
+								mgr.removeEventListener(PresetEvent.LOOKUP_COMPLETE, handler);
+								commit(e.data === null);
+							};
+							mgr.addEventListener(PresetEvent.LOOKUP_COMPLETE, handler);
+							mgr.lookupAsync("does_not_exist");
+						});
+			
+			}
+			
+			/**
+			 * Test async-related Manager functionality - delete.
+			 */
+			private function testsuite_Manager_async_delete():void {
+				
+				_rig.addTest("[deleteAsync] deletes preset by name",
+						function():* {
+							const dir:File = File.createTempDirectory();
+							const mgr:Manager = new Manager(dir);
+							mgr.$set({x: 1}, "toDelete");
+							return mgr;
+						},
+						function(mgr:Manager, commit:Function):void {
+							const handler:Function = function(e:PresetEvent):void {
+								mgr.removeEventListener(PresetEvent.DELETE_COMPLETE, handler);
+								commit(e.data.code === 1 && e.data.preset.name === "toDelete");
+							};
+							mgr.addEventListener(PresetEvent.DELETE_COMPLETE, handler);
+							mgr.$deleteAsync("toDelete");
+						});
+
+				const pName : String = "toDelete2";
+				const p:Preset = new Preset(pName, {x: 2});
+				_rig.addTest("[deleteAsync] deletes preset by Preset instance",
+						function():* {
+							const dir:File = File.createTempDirectory();
+							const mgr:Manager = new Manager(dir);
+							mgr.$set(p, pName);
+							return mgr;
+						},
+						function(mgr:Manager, commit:Function):void {
+							const handler:Function = function(e:PresetEvent):void {
+								mgr.removeEventListener(PresetEvent.DELETE_COMPLETE, handler);
+								commit(e.data.code === 1 && e.data.preset.name === pName);
+							};
+							mgr.addEventListener(PresetEvent.DELETE_COMPLETE, handler);
+							mgr.$deleteAsync(p);
+						});
+			
+				_rig.addTest("[deleteAsync] preset not found",
+						function():* {
+							return new Manager(File.createTempDirectory());
+						},
+						function(mgr:Manager, commit:Function):void {
+							const handler:Function = function(e:PresetEvent):void {
+								mgr.removeEventListener(PresetEvent.DELETE_COMPLETE, handler);
+								commit(e.data.code === 0 && e.data.preset === null);
+							};
+							mgr.addEventListener(PresetEvent.DELETE_COMPLETE, handler);
+							mgr.$deleteAsync("nonexistent");
+						});
+			
+				_rig.addTest("[deleteAsync] aborts on read-only preset",
+						function():* {
+							const dir:File = File.createTempDirectory();
+							const mgr:Manager = new Manager(dir);
+							const preset:Preset = new Preset("readonly", {locked: true}, true);
+							mgr.$set(preset, preset.name, true);
+							return mgr;
+						},
+						function(mgr:Manager, commit:Function):void {
+							const handler:Function = function(e:PresetEvent):void {
+								mgr.removeEventListener(PresetEvent.ERROR, handler);
+								commit(e.data.code === -1 && String(e.data.reason).indexOf("read-only") >= 0);
+							};
+							mgr.addEventListener(PresetEvent.ERROR, handler);
+							mgr.$deleteAsync("readonly");
+						});
+			
+			}
 		]]>
 	</fx:Script>
 
-	<s:Label id="statusLabel"
-		text="Processing"
-		fontSize="14"
-		verticalCenter="0" horizontalCenter="0"
-		top="10" left="10"/>
+	<!-- UI TESTING area -->
+	<s:HGroup width="100%" padding="15" paddingRight="5"
+		verticalAlign="middle">
+		<s:VGroup height="100%" width="50%">
+			<s:Label text="Dummy preset data (JSON):"/>
+			<s:TextArea id="dummyPresetPayload"
+				width="100%" height="100%"
+				fontSize="14"
+				fontFamily="Consolas"
+				contentBackgroundColor="#404040" color="#ffffff">
+			</s:TextArea>
+		</s:VGroup>
+		<s:VGroup width="50%">
+			<rekalui:RekalUi id="testUi"/>
+		</s:VGroup>
+	</s:HGroup>
+
+	<!-- UNIT TESTING area -->
+	<s:Scroller width="100%" height="100%" top="150" right="10" bottom="10" left="10">
+		<s:Group>
+			<s:Label id="statusLabel"
+				color="#ffffff"
+				top="10" right="10" bottom="10" left="10"
+				lineBreak="toFit"
+				text="Processing"
+				fontSize="15"
+				verticalAlign="middle"
+				fontFamily="Consolas"/>
+		</s:Group>
+	</s:Scroller>
 </s:WindowedApplication>

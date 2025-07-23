@@ -17,6 +17,12 @@
 		s|ComboBox, s|TextInput {
 			color: #000000;
 		}
+
+      s|TextInput:normalWithPrompt,
+	  s|TextInput:disabledWithPrompt {
+          color: #848484;
+		  fontStyle: normal;
+      }
 	</fx:Style>
 
 	<fx:Script>
@@ -31,9 +37,9 @@
 			private var _rig:TestRig;
 			
 			/**
-			 * Test helper: makes random ASCII printable characters from 33 (!) to 126 (~)
+			 * Helper: makes random ASCII printable characters from 33 (!) to 126 (~)
 			 */
-			private function junkStr(length:int):String {
+			private function _junkStr(length:int):String {
 				var result:String = "";
 				for (var i:int = 0; i < length; i++) {
 					var charCode:int = 33 + Math.floor(Math.random() * (126 - 33 + 1));
@@ -57,7 +63,7 @@
 			}
 			
 			private function _onCreationComplete():void {
-
+			
 				// --------
 				// UI TESTS
 				// --------
@@ -76,17 +82,17 @@
 						}
 					}
 				};
-
-				const updatePresetData: Function = function (event : PresetEvent) : void {
-					const preset : Preset = (event.data as Preset);
+			
+				const updatePresetData:Function = function(event:PresetEvent):void {
+					const preset:Preset = (event.data as Preset);
 					if (preset) {
-						const settings : Shard = preset.settings as Shard;
-						const json : String = settings.exportTo(Shard.JSON_FORMAT);
-						const obj : Object = JSON.parse (json);
+						const settings:Shard = preset.settings as Shard;
+						const json:String = settings.exportTo(Shard.JSON_FORMAT);
+						const obj:Object = JSON.parse(json);
 						dummyPresetPayload.text = JSON.stringify(obj.content, null, 2);
 					}
-				}
-
+				};
+			
 				testUi.addEventListener(PresetEvent.SAVING, providePresetData);
 				testUi.addEventListener(PresetEvent.CHANGE, updatePresetData);
 			
@@ -464,7 +470,7 @@
 			
 				_rig.addTest("[$set] returns -4 if name is too long", function():* {
 						const mgr:Manager = new Manager(File.createTempDirectory(), 5);
-						return mgr.$set({foo: "bar"}, junkStr(mgr.labelMaxLength + 1));
+						return mgr.$set({foo: "bar"}, _junkStr(mgr.labelMaxLength + 1));
 					}, -4);
 			
 			}
@@ -582,6 +588,24 @@
 							mgr.$setAsync({dup: 123}, "dup");
 						});
 			
+				_rig.addTest("[$setAsync] dispatches SET_COMPLETE with code 2 for legit overwrite",
+						function():* {
+							const mgr:Manager = new Manager(File.createTempDirectory());
+							mgr.$set({original: 1}, "overridable"); // Sync setup for simplicity
+							return mgr;
+						},
+						function(mgr:Manager, commit:Function):void {
+							const handler:Function = function(e:PresetEvent):void {
+								mgr.removeEventListener(PresetEvent.SET_COMPLETE, handler);
+								commit(e.type === PresetEvent.SET_COMPLETE &&
+										e.data.code === 2 &&
+										(e.data.preset as Preset).settings.$get('modified') === 2);
+							};
+							mgr.addEventListener(PresetEvent.SET_COMPLETE, handler);
+							mgr.$setAsync({modified: 2}, "overridable", true);
+						}
+					);
+			
 				_rig.addTest("[$setAsync] dispatches ERROR with code -2 for read-only Preset overwrite",
 						function():* {
 							const mgr:Manager = new Manager(File.createTempDirectory());
@@ -621,7 +645,7 @@
 								commit(e.type === PresetEvent.ERROR && e.data.code === -4);
 							};
 							mgr.addEventListener(PresetEvent.ERROR, handler);
-							mgr.$setAsync({ok: 1}, junkStr(mgr.labelMaxLength + 1)); // name too long
+							mgr.$setAsync({ok: 1}, _junkStr(mgr.labelMaxLength + 1)); // name too long
 						});
 			
 				_rig.addTest("[$setAsync] dispatches ERROR with code -3 for invalid data",
@@ -829,7 +853,7 @@
 			 * Test async-related Manager functionality - delete.
 			 */
 			private function testsuite_Manager_async_delete():void {
-				
+			
 				_rig.addTest("[deleteAsync] deletes preset by name",
 						function():* {
 							const dir:File = File.createTempDirectory();
@@ -845,8 +869,8 @@
 							mgr.addEventListener(PresetEvent.DELETE_COMPLETE, handler);
 							mgr.$deleteAsync("toDelete");
 						});
-
-				const pName : String = "toDelete2";
+			
+				const pName:String = "toDelete2";
 				const p:Preset = new Preset(pName, {x: 2});
 				_rig.addTest("[deleteAsync] deletes preset by Preset instance",
 						function():* {
